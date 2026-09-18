@@ -1,0 +1,22 @@
+# build output
+build/
+cmake-build-*/
+*.o
+*.obj
+*.exe
+*.out
+a.out
+fp32calc
+test_fp32
+legacy_accuracy
+
+# measurement artefacts
+accuracy.csv
+
+# IDE / OS
+.vscode/
+.idea/
+.vs/
+*.swp
+.DS_Store
+Thumbs.db
