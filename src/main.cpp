@@ -3,6 +3,8 @@
 //   fp32calc <a> <op> <b> [--mode nearest|zero|up|down] [--trace]
 //   fp32calc                      (interactive: prompts for the operands)
 //
+// <op> is one of + - x * / or the words add sub mul div (the words are handy
+// where a shell would mangle the symbol).
 // Operands may be written as 32-bit binary strings ("0 01111111 000…", spaces
 // optional), hexadecimal words ("0x3F800000") or decimal literals ("1.5", "-2e-3").
 
@@ -24,7 +26,7 @@ void usage() {
       "usage: fp32calc <a> <op> <b> [--mode nearest|zero|up|down] [--trace]\n"
       "       fp32calc            (interactive)\n"
       "\n"
-      "  <op>   one of  +  -  x  *  /\n"
+      "  <op>   one of  +  -  x  *  /   (or the words add, sub, mul, div)\n"
       "  <a>,<b> binary32 words as 32 binary digits (spaces allowed), 0x-prefixed hex,\n"
       "         or decimal literals such as 1.5, -2e-3, inf, nan\n"
       "  --mode rounding direction (default: nearest = round-to-nearest-even)\n"
@@ -97,10 +99,12 @@ int compute(const std::string& a_text, const std::string& op, const std::string&
 
   bits_t r;
   char symbol;
-  if (op == "+") { r = fp32::add(a, b, mode); symbol = '+'; }
-  else if (op == "-") { r = fp32::sub(a, b, mode); symbol = '-'; }
-  else if (op == "*" || op == "x" || op == "X") { r = fp32::mul(a, b, mode); symbol = '*'; }
-  else if (op == "/") { r = fp32::div(a, b, mode); symbol = '/'; }
+  // Word forms exist because shells mangle the symbols: `*` is a glob, and Git Bash on
+  // Windows rewrites a bare `/` argument into a Windows path (MSYS path conversion).
+  if (op == "+" || op == "add") { r = fp32::add(a, b, mode); symbol = '+'; }
+  else if (op == "-" || op == "sub") { r = fp32::sub(a, b, mode); symbol = '-'; }
+  else if (op == "*" || op == "x" || op == "X" || op == "mul") { r = fp32::mul(a, b, mode); symbol = '*'; }
+  else if (op == "/" || op == "div") { r = fp32::div(a, b, mode); symbol = '/'; }
   else throw std::invalid_argument("unknown operator: " + op);
 
   print_word("a", a);
