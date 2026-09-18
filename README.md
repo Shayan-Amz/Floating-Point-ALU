@@ -234,7 +234,9 @@ result   0 00000000 00000000000000000000000  0x00000000   0  (zero)
 ```
 
 `--mode nearest|zero|up|down` selects the rounding direction; running `fp32calc` with no
-arguments prompts for the operands interactively, as the original program did.
+arguments prompts for the operands interactively, as the original program did. The operators may
+also be spelled `add`, `sub`, `mul`, `div` — useful where a shell would otherwise expand `*` or,
+in Git Bash on Windows, rewrite a bare `/` into a path.
 
 ### Library API
 
