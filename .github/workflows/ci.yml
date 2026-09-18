@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  compiler: gcc,   cc: gcc,   cxx: g++ }
+          - { os: ubuntu-latest,  compiler: clang, cc: clang, cxx: clang++ }
+          - { os: macos-latest,   compiler: clang, cc: clang, cxx: clang++ }
+          - { os: windows-latest, compiler: msvc }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test (bit-exact comparison against the host FPU)
+        run: ctest --test-dir build -C Release -R conformance$ --output-on-failure
+
+      - name: Smoke-test the CLI
+        shell: bash
+        run: |
+          BIN=build/fp32calc; [ -x build/Release/fp32calc.exe ] && BIN=build/Release/fp32calc.exe
+          $BIN 0.1 + 0.2
+          $BIN 1.5 - 1.5
+          $BIN "0 01111111 00000000000000000000000" / "0 10000000 10000000000000000000000" --mode down
