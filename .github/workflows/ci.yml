@@ -18,7 +18,7 @@ jobs:
           - { os: macos-latest,   compiler: clang, cc: clang, cxx: clang++ }
           - { os: windows-latest, compiler: msvc }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Configure
         env:
@@ -34,8 +34,11 @@ jobs:
 
       - name: Smoke-test the CLI
         shell: bash
+        # word operators (add/sub/mul/div): Git Bash on Windows would rewrite a bare "/"
+        # argument into "C:/Program Files/Git" (MSYS path conversion)
         run: |
           BIN=build/fp32calc; [ -x build/Release/fp32calc.exe ] && BIN=build/Release/fp32calc.exe
-          $BIN 0.1 + 0.2
-          $BIN 1.5 - 1.5
-          $BIN "0 01111111 00000000000000000000000" / "0 10000000 10000000000000000000000" --mode down
+          $BIN 0.1 add 0.2
+          $BIN 1.5 sub 1.5
+          $BIN 0x7F7FFFFF mul 2
+          $BIN "0 01111111 00000000000000000000000" div "0 10000000 10000000000000000000000" --mode down --trace
