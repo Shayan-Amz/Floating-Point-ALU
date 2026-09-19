@@ -1,4 +1,4 @@
-# Floating-Point ALU — a bit-exact IEEE 754 binary32 software model
+# A software model of an IEEE 754 binary32 floating-point unit
 
 [![CI](https://github.com/Shayan-Amz/Floating-Point-ALU/actions/workflows/ci.yml/badge.svg)](https://github.com/Shayan-Amz/Floating-Point-ALU/actions/workflows/ci.yml)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus&logoColor=white)](include/fp32/fp32.hpp)
@@ -6,41 +6,19 @@
 [![IEEE 754](https://img.shields.io/badge/IEEE_754-binary32-orange)](https://en.wikipedia.org/wiki/IEEE_754)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A software model of a single-precision floating-point unit, written in C++17 using **integer
-arithmetic only**. It implements the four basic operations — addition, subtraction, multiplication
-and division — following the classic hardware datapath (unpack → align/multiply/divide → normalise →
-round → pack), and produces results that are **bit-for-bit identical to a hardware FPU** for every
-class of operand (normal, subnormal, zero, infinity, NaN) in all four IEEE 754 rounding modes.
+A single-precision floating-point unit written in C++17 using **integer arithmetic only**. Addition,
+subtraction, multiplication and division follow the classic hardware datapath — unpack →
+align/multiply/divide → normalise → round → pack — and return the same bits a hardware FPU would,
+for normals, subnormals, zeros, infinities and NaNs, in all four IEEE 754 rounding modes.
 
-The project started as a Computer Architecture course assignment (a 70-line adder, preserved in
-[`legacy/`](legacy/)). This version rewrites it as a tested library with correct rounding and
-special-value handling, and quantifies the improvement over the original.
-
-<p align="center">
-  <img src="docs/figures/legacy_vs_fp32.png" alt="Correctly rounded results: original program vs. fp32" width="900">
-  <br>
-  <sub>Share of random additions that are correctly rounded: the original adder (bars) vs. the new implementation (line).
-  The original truncates instead of rounding, so once any bit is shifted out it is wrong about half the time.</sub>
-</p>
+The datapath never touches the host's floating-point registers, so the library works the same way on
+any machine and is fully `constexpr`: `static_assert(add(0x3F800000u, 0x3F800000u) == 0x40000000u)`
+is a compile-time check. It began as the adder I wrote for the Computer Architecture course and grew
+into the four operations plus the test suite below.
 
 ---
 
-## Table of Contents
-
-1. [Background: the binary32 format](#background-the-binary32-format)
-2. [Datapath](#datapath)
-3. [Rounding](#rounding)
-4. [Verification](#verification)
-5. [Results](#results)
-6. [Usage](#usage)
-7. [Project structure](#project-structure)
-8. [Limitations & future work](#limitations--future-work)
-9. [References](#references)
-10. [License](#license)
-
----
-
-## Background: the binary32 format
+## The binary32 format
 
 ```
  31   30      23 22                    0
@@ -60,7 +38,8 @@ sign  exponent        fraction (23 bits)
 | infinity | 255 | 0 | ±∞ |
 | NaN | 255 | ≠ 0 | not a number (quiet if bit 22 is set) |
 
-A correct implementation has to handle every row of that table; the original assignment handled only the first.
+Every row of that table is handled explicitly; the interesting ones are the last three, because they
+are where "compute the answer, then round it" stops being the whole story.
 
 ---
 
@@ -84,28 +63,29 @@ All four operations share the same skeleton, mirroring how the hardware is organ
 2. Widen both 24-bit significands by three extra bits and shift y right by the exponent difference,
    **OR-ing every shifted-out bit into the lowest position** (the *sticky* bit).
 3. Add the magnitudes if the signs agree, subtract otherwise.
-4. Normalise: a carry-out shifts right once (exponent + 1); cancellation shifts left until the leading
-   one is back in place — but never below the subnormal scale (exponent 1), which is what makes
-   gradual underflow fall out naturally.
+4. Normalise: a carry-out shifts right once (exponent + 1); cancellation shifts left until the
+   leading one is back in place — but never below the subnormal scale (exponent 1), which is what
+   makes gradual underflow fall out naturally.
 5. Round and pack (next section).
 
 **Multiplication** (`fp32::mul`): exponents add (minus one bias), the 24 × 24-bit significands give a
-48-bit product with its leading one at bit 46 or 47; the excess bits are folded into guard/round/sticky
-and, when the exponent drops below 1, the product is shifted right further to denormalise.
+48-bit product with its leading one at bit 46 or 47; the excess bits are folded into
+guard/round/sticky and, when the exponent drops below 1, the product is shifted right further to
+denormalise.
 
-**Division** (`fp32::div`): exponents subtract (plus one bias); the dividend is doubled if it is smaller
-than the divisor so that the quotient lies in [1, 2); an integer long division then yields
+**Division** (`fp32::div`): exponents subtract (plus one bias); the dividend is doubled if it is
+smaller than the divisor so that the quotient lies in [1, 2); an integer long division then yields
 1 + 23 + 2 quotient bits, and a non-zero remainder sets the sticky bit.
 
-Zero, infinity and NaN operands are resolved before the datapath (invalid operations such as ∞ − ∞,
-0 × ∞ and 0 / 0 return the default quiet NaN `0x7FC00000`; a NaN operand propagates its payload).
+Zero, infinity and NaN operands are resolved before the datapath: invalid operations such as ∞ − ∞,
+0 × ∞ and 0 / 0 return the default quiet NaN `0x7FC00000`, and a NaN operand propagates its payload.
 
 ---
 
 ## Rounding
 
 A finite-width datapath cannot keep every bit of an intermediate result, but it does not need to.
-IEEE 754 correct rounding requires exactly three extra bits beyond the 24-bit significand
+Correct rounding requires exactly three extra bits beyond the 24-bit significand
 (Goldberg 1991, §"Guard digits"):
 
 ```
@@ -126,23 +106,23 @@ The tail `g r s` encodes where the exact result lies relative to the two represe
 | 1 | 0 | **exactly** on the midpoint | increment only if the LSB is 1 (tie → even) |
 
 The directed modes (toward zero / +∞ / −∞) only need to know whether the result is inexact
-(`g ∨ r ∨ s`) and its sign. Incrementing `1.111…1` produces `10.000…0`, which is re-normalised
-(exponent + 1); an exponent that reaches 255 becomes ±∞ in round-to-nearest, or saturates to
-±MaxFinite in the directed modes that must not cross zero-ward (IEEE 754-2019 §7.4).
+(`g ∨ r ∨ s`) and what its sign is. Incrementing `1.111…1` produces `10.000…0`, which is
+re-normalised (exponent + 1); an exponent that reaches 255 becomes ±∞ in round-to-nearest, or
+saturates to ±MaxFinite in the directed modes that must not cross zero-ward (IEEE 754-2019 §7.4).
 
 All of this lives in one function, `detail::round_and_pack`, shared by the four operations.
 
 ---
 
-## Verification
+## How it is tested
 
-Correctness is established by **differential testing against the host FPU** — every x86-64 (SSE),
+Correctness is established by **differential testing against the host FPU**: every x86-64 (SSE),
 AArch64 (NEON) and RISC-V processor implements IEEE 754 binary32 exactly, so the hardware result is
 the oracle. `tests/test_fp32.cpp` compares the model with the hardware **bit for bit** (NaN payloads
 excepted, as they are implementation-defined) for
 
 * a 41 × 41 grid of hand-picked edge values (±0, ±min-subnormal, ±min-normal, 1 ± ulp, 2²³, 2²⁴,
-  ±MaxFinite, ±∞, quiet/signalling NaNs, …) plus the specific inputs that broke the original program;
+  ±MaxFinite, ±∞, quiet/signalling NaNs, and other awkward cases);
 * eight families of random operands designed to stress each part of the datapath: arbitrary bit
   patterns, normals, near-equal exponents (short alignment shifts), tiny (subnormal/underflow), huge
   (overflow), subnormal × normal, huge ÷ tiny, and near-cancelling pairs (x + (−x ± k ulp));
@@ -152,45 +132,10 @@ excepted, as they are implementation-defined) for
   at the subnormal boundary) and `static_assert`s proving the datapath is fully `constexpr`.
 
 The default run (`ctest`) performs **≈ 32 million bit-exact comparisons** in well under a second;
-`test_fp32 2000000` extends that to 256 million.
+`test_fp32 2000000` extends that to 256 million. A mutation check keeps the suite honest: swapping
+round-to-nearest for truncation in the multiplier is caught in 52 % of random products.
 
-A mutation check confirms the test has teeth: swapping round-to-nearest for truncation in the
-multiplier is detected in 52 % of random products.
-
----
-
-## Results
-
-`tools/legacy_accuracy` feeds the same random operands to the original `binary_addition()` and to
-`fp32::add` and compares both with the hardware (`make accuracy`; 100 000 normal pairs per row,
-non-zero results only because the original never terminates on x + (−x)):
-
-| exponent gap | original: exact | original: 1 ulp off | original: > 1 ulp off | fp32::add: exact |
-|:------------:|:---------------:|:-------------------:|:---------------------:|:----------------:|
-| 0 | 87.5 % | 12.4 % | 0.0 % | **100 %** |
-| 1 | 60.9 % | 32.9 % | 6.2 % | **100 %** |
-| 2 | 59.1 % | 36.2 % | 4.7 % | **100 %** |
-| 4 | 52.0 % | 46.8 % | 1.2 % | **100 %** |
-| 8 | 50.0 % | 49.9 % | 0.1 % | **100 %** |
-| 16 | 50.0 % | 50.0 % | 0.0 % | **100 %** |
-| 24 | 0.0 % | 100.0 % | 0.0 % | **100 %** |
-| ≥ 25 | 100.0 % | 0.0 % | 0.0 % | **100 %** |
-| **overall** | **58.2 %** | **40.8 %** | **1.1 %** | **100 %** |
-
-Three regimes are visible in the original adder:
-
-* **gap 0** — no alignment shift; only the carry-out shift after a same-sign addition discards a bit,
-  and that bit is an exact tie which round-to-even resolves upwards half the time: ½ · ½ · ½ = 12.5 % errors;
-* **gaps 1 – 23** — a truncated tail is ≥ ½ ulp about half the time → ~50 % correctly rounded.
-  Small gaps also show > 1 ulp errors: after a subtraction cancels leading bits, the bits that were
-  shifted out are needed again but are gone;
-* **gap 24** — the smaller operand is shifted out entirely, but it is still worth between ½ and 1 ulp
-  of the larger one, so the correctly rounded result differs from the truncated one in (almost) every
-  case — exactly what the sticky bit exists to capture → 100 % one-ulp errors;
-* **gap ≥ 25** — the smaller operand is genuinely negligible and truncation happens to be right.
-
-Beyond accuracy, the original hangs on exact cancellation (`1.5 − 1.5`) and mis-decodes every
-special value; the new implementation handles all of them (see the [test suite](tests/test_fp32.cpp)).
+CI runs the suite with GCC, Clang, MSVC and on macOS.
 
 ---
 
@@ -207,12 +152,13 @@ cmake --build build
 ctest --test-dir build --output-on-failure        # runs the conformance suite
 ```
 
-Without CMake: `make && make test` (GCC or Clang).
-The library itself is a single header — copy `include/fp32/fp32.hpp` into any C++17 project.
+Without CMake: `make && make test` (GCC or Clang). The library itself is a single header — copy
+`include/fp32/fp32.hpp` into any C++17 project.
 
 ### Command-line calculator
 
-Operands can be 32-bit binary strings (spaces between fields optional), hexadecimal words, or decimal literals.
+Operands can be 32-bit binary strings (spaces between fields optional), hexadecimal words, or
+decimal literals.
 
 ```
 $ build/fp32calc 0.1 + 0.2 --trace
@@ -229,14 +175,14 @@ $ build/fp32calc "0 01111111 00000000000000000000000" / "0 10000000 100000000000
 …
 result   0 01111101 01010101010101010101010  0x3EAAAAAA   0.333333313  (normal)
 
-$ build/fp32calc 1.5 - 1.5            # hung the original program
+$ build/fp32calc 1.5 - 1.5            # exact cancellation
 result   0 00000000 00000000000000000000000  0x00000000   0  (zero)
 ```
 
-`--mode nearest|zero|up|down` selects the rounding direction; running `fp32calc` with no
-arguments prompts for the operands interactively, as the original program did. The operators may
-also be spelled `add`, `sub`, `mul`, `div` — useful where a shell would otherwise expand `*` or,
-in Git Bash on Windows, rewrite a bare `/` into a path.
+`--mode nearest|zero|up|down` selects the rounding direction; running `fp32calc` with no arguments
+prompts for the operands interactively. The operators may also be spelled `add`, `sub`, `mul`, `div`
+— useful where a shell would otherwise expand `*` or, in Git Bash on Windows, rewrite a bare `/`
+into a path.
 
 ### Library API
 
@@ -269,27 +215,23 @@ Everything is `noexcept` and `constexpr` except the string conversions, which th
 
 ```
 .
-├── include/fp32/fp32.hpp     the library: format constants, classification, add/sub/mul/div,
-│                             round_and_pack, conversions (≈ 360 lines, header-only)
-├── src/main.cpp              fp32calc command-line front end
-├── tests/test_fp32.cpp       differential conformance tests against the host FPU
-├── tools/
-│   ├── legacy_accuracy.cpp   measures the original adder against fp32::add (table above)
-│   └── plot_accuracy.py      renders docs/figures/legacy_vs_fp32.png from the CSV output
-├── legacy/Project_Final.cpp  the original course submission, unchanged (see legacy/README.md)
-├── docs/figures/
+├── include/fp32/fp32.hpp   the library: format constants, classification, add/sub/mul/div,
+│                           round_and_pack, conversions (≈ 360 lines, header-only)
+├── src/main.cpp            fp32calc command-line front end
+├── tests/test_fp32.cpp     differential conformance tests against the host FPU
 ├── CMakeLists.txt · Makefile · .github/workflows/ci.yml   (GCC, Clang, MSVC, macOS)
 └── LICENSE (MIT)
 ```
 
 ---
 
-## Limitations & future work
+## Limitations and future work
 
 * **Exception flags** — the model returns correctly rounded values but does not raise the IEEE 754
   status flags (inexact, underflow, overflow, invalid, divide-by-zero). Adding a flags out-parameter
   to `round_and_pack` is the natural next step.
-* **Signalling NaNs** — a signalling NaN is quieted and propagated; no invalid-operation signal is raised.
+* **Signalling NaNs** — a signalling NaN is quieted and propagated; no invalid-operation signal is
+  raised.
 * **Further operations** — fused multiply-add, square root (digit-recurrence or Newton–Raphson),
   comparisons and int ⇄ float conversions would complete the unit.
 * **Other formats** — the datapath is written against named constants; templating it on
